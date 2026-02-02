@@ -1,5 +1,9 @@
 # ipburack
 
+[![CI](https://github.com/burakcan/ipburack/actions/workflows/ci.yml/badge.svg)](https://github.com/burakcan/ipburack/actions/workflows/ci.yml)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/burakcan/ipburack)](https://go.dev/)
+[![License](https://img.shields.io/github/license/burakcan/ipburack)](LICENSE)
+
 A high-performance IP geolocation HTTP API written in Go. Converts IP addresses to country codes with <5ms p99 latency.
 
 ## Features
