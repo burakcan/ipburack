@@ -33,7 +33,7 @@ func (l *Logger) log(level, message string, data map[string]any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	json.NewEncoder(os.Stdout).Encode(entry)
+	_ = json.NewEncoder(os.Stdout).Encode(entry)
 }
 
 func (l *Logger) Info(message string, data map[string]any) {

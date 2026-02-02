@@ -5,14 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
-	"github.com/oschwald/maxminddb-golang"
+	"github.com/oschwald/maxminddb-golang/v2"
 )
 
 var (
@@ -124,7 +124,7 @@ func (g *GeoDB) Stop() {
 	for _, inst := range []*dbInstance{g.country, g.cityIPv4, g.cityIPv6} {
 		inst.mu.Lock()
 		if inst.db != nil {
-			inst.db.Close()
+			_ = inst.db.Close()
 		}
 		inst.mu.Unlock()
 	}
@@ -132,8 +132,8 @@ func (g *GeoDB) Stop() {
 
 // Lookup performs a lookup. If useCity is true, tries city DB first with country fallback.
 func (g *GeoDB) Lookup(ipStr string, useCity bool) (*LookupResult, error) {
-	ip := net.ParseIP(ipStr)
-	if ip == nil {
+	ip, err := netip.ParseAddr(ipStr)
+	if err != nil {
 		return nil, ErrInvalidIP
 	}
 
@@ -152,7 +152,7 @@ func (g *GeoDB) Lookup(ipStr string, useCity bool) (*LookupResult, error) {
 	return g.lookupCity(ip)
 }
 
-func (g *GeoDB) lookupCountry(ip net.IP) (*LookupResult, error) {
+func (g *GeoDB) lookupCountry(ip netip.Addr) (*LookupResult, error) {
 	g.country.mu.RLock()
 	db := g.country.db
 	g.country.mu.RUnlock()
@@ -162,7 +162,7 @@ func (g *GeoDB) lookupCountry(ip net.IP) (*LookupResult, error) {
 	}
 
 	var record CountryRecord
-	if err := db.Lookup(ip, &record); err != nil {
+	if err := db.Lookup(ip).Decode(&record); err != nil {
 		return nil, fmt.Errorf("lookup failed: %w", err)
 	}
 
@@ -175,10 +175,10 @@ func (g *GeoDB) lookupCountry(ip net.IP) (*LookupResult, error) {
 	}, nil
 }
 
-func (g *GeoDB) lookupCity(ip net.IP) (*LookupResult, error) {
+func (g *GeoDB) lookupCity(ip netip.Addr) (*LookupResult, error) {
 	// Select IPv4 or IPv6 database based on IP type
 	var inst *dbInstance
-	if ip.To4() != nil {
+	if ip.Is4() {
 		inst = g.cityIPv4
 	} else {
 		inst = g.cityIPv6
@@ -193,7 +193,7 @@ func (g *GeoDB) lookupCity(ip net.IP) (*LookupResult, error) {
 	}
 
 	var record CityRecord
-	if err := db.Lookup(ip, &record); err != nil {
+	if err := db.Lookup(ip).Decode(&record); err != nil {
 		return nil, fmt.Errorf("lookup failed: %w", err)
 	}
 
@@ -219,7 +219,7 @@ func (g *GeoDB) loadDB(inst *dbInstance, name string) error {
 	inst.mu.Unlock()
 
 	if old != nil {
-		old.Close()
+		_ = old.Close()
 	}
 
 	g.logger.Info(name+" database loaded", map[string]any{
@@ -236,7 +236,7 @@ func (g *GeoDB) downloadDB(inst *dbInstance, name string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download failed with status: %d", resp.StatusCode)
@@ -248,22 +248,22 @@ func (g *GeoDB) downloadDB(inst *dbInstance, name string) error {
 	}
 
 	_, err = io.Copy(out, resp.Body)
-	out.Close()
+	_ = out.Close()
 	if err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return err
 	}
 
 	// Validate the downloaded file
 	testDB, err := maxminddb.Open(tmpPath)
 	if err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("downloaded file is invalid: %w", err)
 	}
-	testDB.Close()
+	_ = testDB.Close()
 
 	if err := os.Rename(tmpPath, inst.path); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return err
 	}
 

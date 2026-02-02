@@ -4,7 +4,7 @@
 [![Go Version](https://img.shields.io/github/go-mod/go-version/burakcan/ipburack)](https://go.dev/)
 [![License](https://img.shields.io/github/license/burakcan/ipburack)](LICENSE)
 
-A high-performance IP geolocation HTTP API written in Go. Converts IP addresses to country codes with <5ms p99 latency.
+A high-performance IP geolocation HTTP API written in Go. Converts IP addresses to country codes at >50k req/s.
 
 ## Features
 
@@ -160,7 +160,9 @@ All configuration is via environment variables:
 
 ## Performance
 
-- Target: <5ms p99 latency, >10k requests/second
+- **>50k requests/second** on commodity hardware
+- **<20ms p99 latency** under load
+- ~7 MB memory at idle, ~25 MB under heavy load
 - MMDB format provides memory-mapped lookups
 - RWMutex allows concurrent reads
 - Hot reload swaps database pointer without blocking

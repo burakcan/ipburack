@@ -29,7 +29,7 @@ func (a *AuthMiddleware) Wrap(next http.HandlerFunc) http.HandlerFunc {
 		if subtle.ConstantTimeCompare([]byte(key), a.apiKey) != 1 {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(map[string]string{"error": "invalid or missing API key"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid or missing API key"})
 			return
 		}
 
