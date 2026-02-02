@@ -22,15 +22,21 @@ func main() {
 	log.Info("starting server", map[string]any{
 		"host":                  cfg.Host,
 		"port":                  cfg.Port,
-		"mmdb_path":             cfg.MMDBPath,
-		"mmdb_url":              cfg.MMDBURL,
+		"country_db_path":       cfg.CountryDBPath,
+		"city_db_ipv4_path":     cfg.CityDBIPv4Path,
+		"city_db_ipv6_path":     cfg.CityDBIPv6Path,
 		"update_interval_hours": cfg.UpdateIntervalHours,
 		"api_key_enabled":       cfg.APIKey != "",
 	})
 
-	// Initialize the geo database
+	// Initialize the geo database (country + city IPv4/IPv6)
 	updateInterval := time.Duration(cfg.UpdateIntervalHours) * time.Hour
-	geo := geodb.New(cfg.MMDBPath, cfg.MMDBURL, updateInterval, log)
+	geo := geodb.New(
+		cfg.CountryDBPath, cfg.CountryDBURL,
+		cfg.CityDBIPv4Path, cfg.CityDBIPv4URL,
+		cfg.CityDBIPv6Path, cfg.CityDBIPv6URL,
+		updateInterval, log,
+	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -20,14 +20,23 @@ var (
 	ErrIPNotFound = errors.New("IP not found in database")
 )
 
-// Record matches the structure in geolite2-geo-whois-asn-country MMDB
-type Record struct {
+// CountryRecord matches the structure in geolite2-geo-whois-asn-country MMDB
+type CountryRecord struct {
 	CountryCode string `maxminddb:"country_code"`
 }
 
+// CityRecord matches the structure in geolite2-city MMDB
+type CityRecord struct {
+	CountryCode string  `maxminddb:"country_code"`
+	City        string  `maxminddb:"city"`
+	PostCode    string  `maxminddb:"postcode"`
+	Latitude    float64 `maxminddb:"latitude"`
+	Longitude   float64 `maxminddb:"longitude"`
+}
+
 type LookupResult struct {
-	IP          string `json:"ip"`
 	CountryCode string `json:"country_code"`
+	PostalCode  string `json:"postal_code,omitempty"`
 }
 
 type Logger interface {
@@ -35,50 +44,73 @@ type Logger interface {
 	Error(message string, data map[string]any)
 }
 
+type dbInstance struct {
+	db   *maxminddb.Reader
+	mu   sync.RWMutex
+	path string
+	url  string
+}
+
 type GeoDB struct {
-	db             *maxminddb.Reader
-	mu             sync.RWMutex
-	path           string
-	url            string
+	country        *dbInstance
+	cityIPv4       *dbInstance
+	cityIPv6       *dbInstance
 	updateInterval time.Duration
 	logger         Logger
 	cancel         context.CancelFunc
 	wg             sync.WaitGroup
 }
 
-func New(path, url string, updateInterval time.Duration, logger Logger) *GeoDB {
+func New(countryPath, countryURL, cityIPv4Path, cityIPv4URL, cityIPv6Path, cityIPv6URL string, updateInterval time.Duration, logger Logger) *GeoDB {
 	return &GeoDB{
-		path:           path,
-		url:            url,
+		country:        &dbInstance{path: countryPath, url: countryURL},
+		cityIPv4:       &dbInstance{path: cityIPv4Path, url: cityIPv4URL},
+		cityIPv6:       &dbInstance{path: cityIPv6Path, url: cityIPv6URL},
 		updateInterval: updateInterval,
 		logger:         logger,
 	}
 }
 
 func (g *GeoDB) Start(ctx context.Context) error {
-	dir := filepath.Dir(g.path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create data directory: %w", err)
+	// Initialize all databases
+	if err := g.initDB(g.country, "country"); err != nil {
+		return err
+	}
+	if err := g.initDB(g.cityIPv4, "city-ipv4"); err != nil {
+		return err
+	}
+	if err := g.initDB(g.cityIPv6, "city-ipv6"); err != nil {
+		return err
 	}
 
-	if _, err := os.Stat(g.path); os.IsNotExist(err) {
-		g.logger.Info("database not found, downloading", map[string]any{
-			"path": g.path,
-			"url":  g.url,
-		})
-		if err := g.download(); err != nil {
-			return fmt.Errorf("failed to download database: %w", err)
-		}
-	}
-
-	if err := g.load(); err != nil {
-		return fmt.Errorf("failed to load database: %w", err)
-	}
-
+	// Start background update goroutine
 	updateCtx, cancel := context.WithCancel(ctx)
 	g.cancel = cancel
 	g.wg.Add(1)
 	go g.updateLoop(updateCtx)
+
+	return nil
+}
+
+func (g *GeoDB) initDB(inst *dbInstance, name string) error {
+	dir := filepath.Dir(inst.path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create data directory: %w", err)
+	}
+
+	if _, err := os.Stat(inst.path); os.IsNotExist(err) {
+		g.logger.Info(name+" database not found, downloading", map[string]any{
+			"path": inst.path,
+			"url":  inst.url,
+		})
+		if err := g.downloadDB(inst, name); err != nil {
+			return fmt.Errorf("failed to download %s database: %w", name, err)
+		}
+	}
+
+	if err := g.loadDB(inst, name); err != nil {
+		return fmt.Errorf("failed to load %s database: %w", name, err)
+	}
 
 	return nil
 }
@@ -89,30 +121,48 @@ func (g *GeoDB) Stop() {
 	}
 	g.wg.Wait()
 
-	g.mu.Lock()
-	if g.db != nil {
-		g.db.Close()
+	for _, inst := range []*dbInstance{g.country, g.cityIPv4, g.cityIPv6} {
+		inst.mu.Lock()
+		if inst.db != nil {
+			inst.db.Close()
+		}
+		inst.mu.Unlock()
 	}
-	g.mu.Unlock()
 }
 
-func (g *GeoDB) Lookup(ipStr string) (*LookupResult, error) {
+// Lookup performs a lookup. If useCity is true, tries city DB first with country fallback.
+func (g *GeoDB) Lookup(ipStr string, useCity bool) (*LookupResult, error) {
 	ip := net.ParseIP(ipStr)
 	if ip == nil {
 		return nil, ErrInvalidIP
 	}
 
-	g.mu.RLock()
-	db := g.db
-	g.mu.RUnlock()
-
-	if db == nil {
-		return nil, errors.New("database not loaded")
+	if useCity {
+		// Try city first, fallback to country
+		if result, err := g.lookupCity(ip); err == nil {
+			return result, nil
+		}
+		return g.lookupCountry(ip)
 	}
 
-	var record Record
-	err := db.Lookup(ip, &record)
-	if err != nil {
+	// Try country first, fallback to city
+	if result, err := g.lookupCountry(ip); err == nil {
+		return result, nil
+	}
+	return g.lookupCity(ip)
+}
+
+func (g *GeoDB) lookupCountry(ip net.IP) (*LookupResult, error) {
+	g.country.mu.RLock()
+	db := g.country.db
+	g.country.mu.RUnlock()
+
+	if db == nil {
+		return nil, errors.New("country database not loaded")
+	}
+
+	var record CountryRecord
+	if err := db.Lookup(ip, &record); err != nil {
 		return nil, fmt.Errorf("lookup failed: %w", err)
 	}
 
@@ -121,37 +171,68 @@ func (g *GeoDB) Lookup(ipStr string) (*LookupResult, error) {
 	}
 
 	return &LookupResult{
-		IP:          ipStr,
 		CountryCode: record.CountryCode,
 	}, nil
 }
 
-func (g *GeoDB) load() error {
-	db, err := maxminddb.Open(g.path)
+func (g *GeoDB) lookupCity(ip net.IP) (*LookupResult, error) {
+	// Select IPv4 or IPv6 database based on IP type
+	var inst *dbInstance
+	if ip.To4() != nil {
+		inst = g.cityIPv4
+	} else {
+		inst = g.cityIPv6
+	}
+
+	inst.mu.RLock()
+	db := inst.db
+	inst.mu.RUnlock()
+
+	if db == nil {
+		return nil, errors.New("city database not loaded")
+	}
+
+	var record CityRecord
+	if err := db.Lookup(ip, &record); err != nil {
+		return nil, fmt.Errorf("lookup failed: %w", err)
+	}
+
+	if record.CountryCode == "" {
+		return nil, ErrIPNotFound
+	}
+
+	return &LookupResult{
+		CountryCode: record.CountryCode,
+		PostalCode:  record.PostCode,
+	}, nil
+}
+
+func (g *GeoDB) loadDB(inst *dbInstance, name string) error {
+	db, err := maxminddb.Open(inst.path)
 	if err != nil {
 		return err
 	}
 
-	g.mu.Lock()
-	old := g.db
-	g.db = db
-	g.mu.Unlock()
+	inst.mu.Lock()
+	old := inst.db
+	inst.db = db
+	inst.mu.Unlock()
 
 	if old != nil {
 		old.Close()
 	}
 
-	g.logger.Info("database loaded", map[string]any{
-		"path": g.path,
+	g.logger.Info(name+" database loaded", map[string]any{
+		"path": inst.path,
 	})
 
 	return nil
 }
 
-func (g *GeoDB) download() error {
-	tmpPath := g.path + ".tmp"
+func (g *GeoDB) downloadDB(inst *dbInstance, name string) error {
+	tmpPath := inst.path + ".tmp"
 
-	resp, err := http.Get(g.url)
+	resp, err := http.Get(inst.url)
 	if err != nil {
 		return err
 	}
@@ -181,14 +262,14 @@ func (g *GeoDB) download() error {
 	}
 	testDB.Close()
 
-	if err := os.Rename(tmpPath, g.path); err != nil {
+	if err := os.Rename(tmpPath, inst.path); err != nil {
 		os.Remove(tmpPath)
 		return err
 	}
 
-	g.logger.Info("database downloaded", map[string]any{
-		"path": g.path,
-		"url":  g.url,
+	g.logger.Info(name+" database downloaded", map[string]any{
+		"path": inst.path,
+		"url":  inst.url,
 	})
 
 	return nil
@@ -207,18 +288,21 @@ func (g *GeoDB) updateLoop(ctx context.Context) {
 		case <-ticker.C:
 			g.logger.Info("starting scheduled database update", nil)
 
-			if err := g.download(); err != nil {
-				g.logger.Error("database update failed", map[string]any{
-					"error": err.Error(),
-				})
-				continue
+			dbs := []struct {
+				inst *dbInstance
+				name string
+			}{
+				{g.country, "country"},
+				{g.cityIPv4, "city-ipv4"},
+				{g.cityIPv6, "city-ipv6"},
 			}
 
-			if err := g.load(); err != nil {
-				g.logger.Error("failed to reload database after update", map[string]any{
-					"error": err.Error(),
-				})
-				continue
+			for _, d := range dbs {
+				if err := g.downloadDB(d.inst, d.name); err != nil {
+					g.logger.Error(d.name+" database update failed", map[string]any{"error": err.Error()})
+				} else if err := g.loadDB(d.inst, d.name); err != nil {
+					g.logger.Error(d.name+" database reload failed", map[string]any{"error": err.Error()})
+				}
 			}
 
 			g.logger.Info("database update completed", nil)

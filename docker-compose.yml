@@ -8,8 +8,8 @@ services:
     environment:
       - HOST=0.0.0.0
       - PORT=${PORT:-3002}
-      - MMDB_PATH=/data/geo.mmdb
-      - MMDB_URL=https://cdn.jsdelivr.net/npm/@ip-location-db/geolite2-geo-whois-asn-country-mmdb/geolite2-geo-whois-asn-country.mmdb
+      - COUNTRY_DB_PATH=/data/country.mmdb
+      - CITY_DB_PATH=/data/city.mmdb
       - UPDATE_INTERVAL_HOURS=24
       - API_KEY=${API_KEY:-}
     restart: unless-stopped

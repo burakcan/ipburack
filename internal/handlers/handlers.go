@@ -12,7 +12,7 @@ import (
 )
 
 type GeoLookup interface {
-	Lookup(ip string) (*geodb.LookupResult, error)
+	Lookup(ip string, useCity bool) (*geodb.LookupResult, error)
 }
 
 type Handlers struct {
@@ -52,7 +52,8 @@ func (h *Handlers) LookupIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.doLookup(w, path)
+	useCity := r.URL.Query().Get("pc") == "true"
+	h.doLookup(w, path, useCity)
 }
 
 func (h *Handlers) LookupSelf(w http.ResponseWriter, r *http.Request) {
@@ -62,15 +63,17 @@ func (h *Handlers) LookupSelf(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.doLookup(w, ip)
+	useCity := r.URL.Query().Get("pc") == "true"
+	h.doLookup(w, ip, useCity)
 }
 
 type LookupResponse struct {
 	CountryCode string `json:"country_code"`
+	PostalCode  string `json:"postal_code,omitempty"`
 }
 
-func (h *Handlers) doLookup(w http.ResponseWriter, ip string) {
-	result, err := h.geo.Lookup(ip)
+func (h *Handlers) doLookup(w http.ResponseWriter, ip string, useCity bool) {
+	result, err := h.geo.Lookup(ip, useCity)
 	if err != nil {
 		if errors.Is(err, geodb.ErrInvalidIP) {
 			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid IP address"})
@@ -84,7 +87,10 @@ func (h *Handlers) doLookup(w http.ResponseWriter, ip string) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, LookupResponse{CountryCode: result.CountryCode})
+	writeJSON(w, http.StatusOK, LookupResponse{
+		CountryCode: result.CountryCode,
+		PostalCode:  result.PostalCode,
+	})
 }
 
 func getClientIP(r *http.Request) string {
