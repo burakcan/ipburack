@@ -1,0 +1,21 @@
+# Binaries (root level only)
+/server
+*.exe
+
+# Environment
+.env
+.env.*
+
+# Data
+/data/
+*.mmdb
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
